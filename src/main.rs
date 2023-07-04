@@ -17,21 +17,38 @@ use tokio::sync::Mutex;
 use serde_json::{Value, json};
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
+use std::collections::HashMap;
 use mongodb::{options::ClientOptions, Client, Database, Collection};
 use mongodb::bson::doc;
-use mongodb::bson::oid::ObjectId;
+//use mongodb::bson::oid::ObjectId;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Traffic {
+    pub method: String,
+    pub scheme: String,
+    pub host: String,
+    pub path: String,
+    pub query: String,
+    pub request_headers: HashMap<String, String>,
+    pub request_body: Vec<u8>,
+    pub request_body_string: Option<String>,
+    pub status: u16,
+    pub response_headers: HashMap<String, String>,
+    pub response_body: Vec<u8>,
+    pub response_body_string: Option<String>,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrafficParams {
+    pub method: Option<String>,
+    pub host: Option<String>,
+    pub path: Option<String>,
+}
 
 #[derive(Clone)]
 struct AppState {
     db: Arc<Mutex<Database>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Document {
-    #[serde(rename = "_id")] // Use MongoDB's default
-    id: ObjectId,
-    name: String,
-    description: String,
 }
 
 // For MongoDB errors
@@ -40,12 +57,11 @@ struct ErrorResponse {
     message: String,
 }
 
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client_options = ClientOptions::parse("mongodb://127.0.0.1:27017").await?;
     let client = Client::with_options(client_options)?;
-    let db = client.database("traffic");
+    let db = client.database("ohm");
     let shared_state = Arc::new(AppState{
         db: Arc::new(Mutex::new(db))
     });
@@ -88,16 +104,14 @@ async fn handle_db_healthcheck(
 
 
 async fn handle_traffic(
-    Query(query): Query<Document>,
+    Query(query): Query<TrafficParams>,
     State(app_state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let collection : Collection<Document> = app_state.db.lock().await.collection("documents");
+    let collection : Collection<Traffic> = app_state.db.lock().await.collection("traffic");
     let filter = doc! {
-        "name": &query.name,
-        "description": &query.description,
+        "host": {"$regex": &query.host, "$options": "i"},
+
     };
-
-
     match collection.find_one(filter, None).await {
         Ok(document) => {
             match document {
