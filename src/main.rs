@@ -18,8 +18,9 @@ use serde_json::{Value, json};
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
 use std::collections::HashMap;
-use mongodb::{options::ClientOptions, Client, Database, Collection};
+use mongodb::{options::ClientOptions, options::AggregateOptions, Client, Database, Collection};
 use mongodb::bson::doc;
+use tokio_stream::StreamExt;
 //use mongodb::bson::oid::ObjectId;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -112,14 +113,21 @@ async fn handle_traffic(
         "host": {"$regex": &query.host, "$options": "i"},
 
     };
-    match collection.find_one(filter, None).await {
-        Ok(document) => {
-            match document {
-                Some(doc) => Ok(Json(doc)),
-                None => {
-                    let error_response = ErrorResponse { message: "No matching document found".to_string() };
-                    Err((StatusCode::NOT_FOUND, Json(error_response)))
+    let data = collection.find(filter, None).await;
+    let mut results = vec![];
+    match data {
+        Ok(mut cursor) => {
+            while let Some(document) = cursor.next().await {
+                match document {
+                    Ok(doc) => results.push(doc),
+                    Err(_) => (),
                 }
+            }
+            if results.len() > 0 {
+                Ok(Json(results))
+            }else{
+                let error_response = ErrorResponse { message: "No matching document found.".to_string() };
+                Err((StatusCode::NOT_FOUND, Json(error_response)))
             }
         },
         Err(e) => {
