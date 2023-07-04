@@ -18,7 +18,8 @@ use serde_json::{Value, json};
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
 use std::collections::HashMap;
-use mongodb::{options::ClientOptions, options::AggregateOptions, Client, Database, Collection};
+use mongodb::{options::ClientOptions, Client, Database, Collection};
+use mongodb::options::FindOptions;
 use mongodb::bson::doc;
 use tokio_stream::StreamExt;
 //use mongodb::bson::oid::ObjectId;
@@ -42,6 +43,13 @@ pub struct Traffic {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrafficParams {
+    pub method: Option<String>,
+    pub host: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrafficResults {
     pub method: Option<String>,
     pub host: Option<String>,
     pub path: Option<String>,
@@ -108,12 +116,15 @@ async fn handle_traffic(
     Query(query): Query<TrafficParams>,
     State(app_state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let collection : Collection<Traffic> = app_state.db.lock().await.collection("traffic");
+    let collection : Collection<TrafficResults> = app_state.db.lock().await.collection("traffic");
     let filter = doc! {
         "host": {"$regex": &query.host, "$options": "i"},
 
     };
-    let data = collection.find(filter, None).await;
+    let options = FindOptions::builder()
+        .projection(Some(doc! { "method": 1, "host": 1, "path": 1, "_id": 0 }))
+        .build();
+    let data = collection.find(filter, Some(options)).await;
     let mut results = vec![];
     match data {
         Ok(mut cursor) => {
