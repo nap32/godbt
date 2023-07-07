@@ -1,6 +1,6 @@
-#[allow(dead_code)]
-#[allow(unused_variables)]
-#[allow(unused_imports)]
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 
 use anyhow::Result;
 use axum::{
@@ -129,12 +129,9 @@ async fn handle_traffic(
     match data {
         Ok(mut cursor) => {
             while let Some(document) = cursor.next().await {
-                match document {
-                    Ok(doc) => results.push(doc),
-                    Err(_) => (),
-                }
+                if let Ok(doc) = document { results.push(doc) }
             }
-            if results.len() > 0 {
+            if !results.is_empty() {
                 Ok(Json(results))
             }else{
                 let error_response = ErrorResponse { message: "No matching document found.".to_string() };
