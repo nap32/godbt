@@ -5,22 +5,21 @@
 use anyhow::Result;
 use axum::{
     body::Body,
-    extract::{State, Extension, Query},
+    extract::{Extension, Query, State},
     http::{Response, StatusCode},
+    response::IntoResponse,
     routing::get,
     routing::post,
-    response::IntoResponse,
-    Router,
-    Json,
+    Json, Router,
 };
-use tokio::sync::Mutex;
-use serde_json::{Value, json};
-use serde::{Serialize, Deserialize};
-use std::sync::Arc;
-use std::collections::HashMap;
-use mongodb::{options::ClientOptions, Client, Database, Collection};
-use mongodb::options::FindOptions;
 use mongodb::bson::doc;
+use mongodb::options::FindOptions;
+use mongodb::{options::ClientOptions, Client, Collection, Database};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 //use mongodb::bson::oid::ObjectId;
 
@@ -71,8 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client_options = ClientOptions::parse("mongodb://127.0.0.1:27017").await?;
     let client = Client::with_options(client_options)?;
     let db = client.database("ohm");
-    let shared_state = Arc::new(AppState{
-        db: Arc::new(Mutex::new(db))
+    let shared_state = Arc::new(AppState {
+        db: Arc::new(Mutex::new(db)),
     });
 
     let app = Router::new()
@@ -90,33 +89,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn get_text(
-    State(state): State<Arc<AppState>>,
-) -> &'static str {
+async fn get_text(State(state): State<Arc<AppState>>) -> &'static str {
     "Hello, World!"
 }
 
-async fn get_json(
-    State(state): State<Arc<AppState>>,
-) -> Json<Value> {
+async fn get_json(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({ "data": 42 }))
 }
 
-async fn handle_db_healthcheck(
-    State(app_state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn handle_db_healthcheck(State(app_state): State<Arc<AppState>>) -> impl IntoResponse {
     match app_state.db.lock().await.list_collection_names(None).await {
         Ok(_) => (StatusCode::OK, "Database is healthy"),
         Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "Database is down"),
     }
 }
 
-
 async fn handle_traffic(
     Query(query): Query<TrafficParams>,
     State(app_state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let collection : Collection<TrafficResults> = app_state.db.lock().await.collection("traffic");
+    let collection: Collection<TrafficResults> = app_state.db.lock().await.collection("traffic");
     let filter = doc! {
         "host": {"$regex": &query.host, "$options": "i"},
 
@@ -129,17 +121,23 @@ async fn handle_traffic(
     match data {
         Ok(mut cursor) => {
             while let Some(document) = cursor.next().await {
-                if let Ok(doc) = document { results.push(doc) }
+                if let Ok(doc) = document {
+                    results.push(doc)
+                }
             }
             if !results.is_empty() {
                 Ok(Json(results))
-            }else{
-                let error_response = ErrorResponse { message: "No matching document found.".to_string() };
+            } else {
+                let error_response = ErrorResponse {
+                    message: "No matching document found.".to_string(),
+                };
                 Err((StatusCode::NOT_FOUND, Json(error_response)))
             }
-        },
+        }
         Err(e) => {
-            let error_response = ErrorResponse { message: e.to_string() };
+            let error_response = ErrorResponse {
+                message: e.to_string(),
+            };
             Err((StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)))
         }
     }
