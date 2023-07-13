@@ -90,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/healthcheck", get(handle_db_healthcheck))
         .route("/db", get(handle_traffic))
+        .route("/traffic/records", get(handle_traffic_records))
         .with_state(shared_state);
 
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
@@ -137,6 +138,43 @@ async fn handle_traffic(
                 };
                 Err((StatusCode::NOT_FOUND, Json(error_response)))
             }
+        }
+        Err(e) => {
+            let error_response = ErrorResponse {
+                message: e.to_string(),
+            };
+            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)))
+        }
+    }
+}
+
+async fn handle_traffic_records(
+    Query(query): Query<TrafficParams>,
+    State(app_state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, impl IntoResponse>
+{
+    let page_number : u64 = 0;
+    let page : u64 = 10;
+    let page_size : i64 = 10;
+    let collection: Collection<TrafficResults> = app_state.db.lock().await.collection("traffic");
+    let find_options = FindOptions::builder()
+        .sort(doc! { "host": 1 })
+        .skip(Some(page_number * page))
+        .limit(Some(page_size))
+        .build();
+    let data = collection.find(None, find_options).await;
+    match data {
+        Ok(mut cursor) => {
+            let mut results = vec![];
+            while let Some(result) = cursor.next().await {
+                match result {
+                    Ok(document) => {
+                        results.push(document);
+                    }
+                    Err(e) => {}
+                }
+            }
+            Ok(Json(results))
         }
         Err(e) => {
             let error_response = ErrorResponse {
