@@ -88,8 +88,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let app = Router::new()
-        .route("/", get(get_text))
-        .route("/json", get(get_json))
         .route("/healthcheck", get(handle_db_healthcheck))
         .route("/db", get(handle_traffic))
         .with_state(shared_state);
@@ -100,14 +98,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
 
     Ok(())
-}
-
-async fn get_text(State(state): State<Arc<AppState>>) -> &'static str {
-    "Hello, World!"
-}
-
-async fn get_json(State(state): State<Arc<AppState>>) -> Json<Value> {
-    Json(json!({ "data": 42 }))
 }
 
 async fn handle_db_healthcheck(State(app_state): State<Arc<AppState>>) -> impl IntoResponse {
