@@ -49,6 +49,8 @@ pub struct TrafficParams {
     pub method: Option<String>,
     pub host: Option<String>,
     pub path: Option<String>,
+    pub page: Option<u64>,
+    pub size: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/healthcheck", get(handle_db_healthcheck))
-        .route("/db", get(handle_traffic))
+        .route("/traffic/graph", get(handle_traffic_graph))
         .route("/traffic/records", get(handle_traffic_records))
         .with_state(shared_state);
 
@@ -108,7 +110,7 @@ async fn handle_db_healthcheck(State(app_state): State<Arc<AppState>>) -> impl I
     }
 }
 
-async fn handle_traffic(
+async fn handle_traffic_graph(
     Query(query): Query<TrafficParams>,
     State(app_state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
@@ -153,16 +155,26 @@ async fn handle_traffic_records(
     State(app_state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, impl IntoResponse>
 {
-    let page_number : u64 = 0;
-    let page : u64 = 10;
-    let page_size : i64 = 10;
+    let mut page_number : u64 = 0;
+    if let Some(ref number) = &query.page {
+        page_number = *number as u64;
+    }
+    let mut page_size : u64 = 10;
+    if let Some(ref sz) = &query.size {
+        page_size = *sz as u64
+    }
+    let filter = doc! {
+        "host": {"$regex": &query.host, "$options": "i"},
+
+    };
     let collection: Collection<TrafficResults> = app_state.db.lock().await.collection("traffic");
     let find_options = FindOptions::builder()
         .sort(doc! { "host": 1 })
-        .skip(Some(page_number * page))
-        .limit(Some(page_size))
+        .projection(Some(doc! { "method": 1, "host": 1, "path": 1, "_id": 0 }))
+        .skip(Some(page_number * page_size))
+        .limit(Some(page_size as i64))
         .build();
-    let data = collection.find(None, find_options).await;
+    let data = collection.find(filter, Some(find_options)).await;
     match data {
         Ok(mut cursor) => {
             let mut results = vec![];
