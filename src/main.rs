@@ -6,7 +6,7 @@ use anyhow::Result;
 use axum::{
     body::Body,
     extract::{Extension, Query, State},
-    http::{Response, StatusCode},
+    http::{Response, StatusCode, Method, HeaderValue},
     response::IntoResponse,
     routing::get,
     routing::post,
@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
+use tower_http::cors::{Any, CorsLayer};
+use tower::ServiceBuilder;
 //use mongodb::bson::oid::ObjectId;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -89,10 +91,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db: Arc::new(Mutex::new(db)),
     });
 
+    let cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_origin("http://localhost:3001".parse::<HeaderValue>().unwrap());
+
     let app = Router::new()
         .route("/healthcheck", get(handle_db_healthcheck))
         .route("/traffic/graph", get(handle_traffic_graph))
         .route("/traffic/records", get(handle_traffic_records))
+        .layer(
+            ServiceBuilder::new()
+                .layer(cors)
+        )
         .with_state(shared_state);
 
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
