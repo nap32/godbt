@@ -6,7 +6,7 @@ use anyhow::Result;
 use axum::{
     body::Body,
     extract::{Extension, Query, State},
-    http::{Response, StatusCode, Method, HeaderValue},
+    http::{HeaderValue, Method, Response, StatusCode},
     response::IntoResponse,
     routing::get,
     routing::post,
@@ -15,8 +15,8 @@ use axum::{
 use mongodb::bson::doc;
 use mongodb::options::FindOptions;
 use mongodb::{options::ClientOptions, Client, Collection, Database};
-use petgraph::graph::{Graph, NodeIndex, EdgeIndex};
-use petgraph::dot::{Dot, Config};
+use petgraph::dot::{Config, Dot};
+use petgraph::graph::{EdgeIndex, Graph, NodeIndex};
 use petgraph::graphmap::GraphMap;
 use petgraph::Directed;
 use serde::{Deserialize, Serialize};
@@ -25,8 +25,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
-use tower_http::cors::{Any, CorsLayer};
 use tower::ServiceBuilder;
+use tower_http::cors::{Any, CorsLayer};
 //use mongodb::bson::oid::ObjectId;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -63,13 +63,29 @@ pub struct TrafficResults {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphNode {
-    pub weight: String,
-    // Future extensibility to support additional properties that aren't weight.
+pub struct GraphResponse {
+    pub nodes: Vec<ResponseNode>,
+    pub links: Vec<ResponseLink>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphEdge { }
+pub struct ResponseNode {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseLink {
+    pub source: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphNode {
+    pub weight: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphEdge {}
 
 #[derive(Clone)]
 struct AppState {
@@ -99,10 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/healthcheck", get(handle_db_healthcheck))
         .route("/traffic/graph", get(handle_traffic_graph))
         .route("/traffic/records", get(handle_traffic_records))
-        .layer(
-            ServiceBuilder::new()
-                .layer(cors)
-        )
+        .layer(ServiceBuilder::new().layer(cors))
         .with_state(shared_state);
 
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
@@ -131,6 +144,7 @@ async fn handle_traffic_graph(
     };
     let options = FindOptions::builder()
         .projection(Some(doc! { "method": 1, "host": 1, "path": 1, "_id": 0 }))
+        .limit(Some(100))
         .build();
     let data = collection.find(filter, Some(options)).await;
     let mut results = vec![];
@@ -143,7 +157,8 @@ async fn handle_traffic_graph(
             }
             if !results.is_empty() {
                 let (graph, nodes, edges) = traffic_graph_builder(results.clone()).await;
-                Ok(Json(graph))
+                let response = traffic_graph_response(graph, nodes, edges).await;
+                Ok(Json(response))
             } else {
                 let error_response = ErrorResponse {
                     message: "No matching document found.".to_string(),
@@ -163,15 +178,14 @@ async fn handle_traffic_graph(
 async fn handle_traffic_records(
     Query(query): Query<TrafficParams>,
     State(app_state): State<Arc<AppState>>,
-) -> Result<impl IntoResponse, impl IntoResponse>
-{
-    let mut page_number : u64 = 0;
+) -> Result<impl IntoResponse, impl IntoResponse> {
+    let mut page_number: u64 = 0;
     if let Some(ref number) = &query.page {
-        page_number = *number as u64;
+        page_number = *number;
     }
-    let mut page_size : u64 = 10;
+    let mut page_size: u64 = 10;
     if let Some(ref sz) = &query.size {
-        page_size = *sz as u64
+        page_size = *sz
     }
     let filter = doc! {
         "host": {"$regex": &query.host, "$options": "i"},
@@ -207,6 +221,32 @@ async fn handle_traffic_records(
     }
 }
 
+async fn traffic_graph_response(
+    graph: Graph<GraphNode, GraphEdge, Directed>,
+    nodes: HashMap<String, NodeIndex>,
+    edges: HashMap<(String, String), EdgeIndex>,
+) -> String {
+    let mut response = GraphResponse {
+        nodes: vec![],
+        links: vec![],
+    };
+
+    for (id, node_index) in nodes {
+        let node = graph.node_weight(node_index).unwrap();
+        response.nodes.push(ResponseNode { id });
+    }
+
+    for ((source, target), edge_index) in edges {
+        let edge = graph.edge_weight(edge_index).unwrap();
+        response.links.push(ResponseLink {
+            source: source.clone(),
+            target: target.clone(),
+        });
+    }
+
+    serde_json::to_string(&response).unwrap()
+}
+
 async fn traffic_graph_builder(
     results: Vec<TrafficResults>,
 ) -> (
@@ -215,41 +255,43 @@ async fn traffic_graph_builder(
     HashMap<(String, String), EdgeIndex>,
 ) {
     let mut graph = Graph::<GraphNode, GraphEdge, Directed>::new();
-    let mut nodes : HashMap<String, NodeIndex> = HashMap::new();
-    let mut edges : HashMap<(String, String), EdgeIndex> = HashMap::new();
-    
+    let mut nodes: HashMap<String, NodeIndex> = HashMap::new();
+    let mut edges: HashMap<(String, String), EdgeIndex> = HashMap::new();
+
     for doc in results {
-        if let Some(ref host) = doc.host.clone(){
-            let host_elements : Vec<String> = host.split(".").map(|s| s.to_string()).collect();
+        if let Some(ref host) = doc.host.clone() {
+            let host_elements: Vec<String> = host.split('.').map(|s| s.to_string()).collect();
             let len = host_elements.len();
             if len < 2 {
                 // Todo -- error.
             }
-            for i in (0..len-1).rev() {
+            for i in (0..len - 1).rev() {
                 let node_key = &host_elements[i..len].join(".");
                 if nodes.contains_key(node_key) {
                     let node = nodes.get(node_key);
                 } else {
-                    let weight = GraphNode { weight : node_key.clone() };
+                    let weight = GraphNode {
+                        weight: node_key.clone(),
+                    };
                     let node = graph.add_node(weight);
                     nodes.insert(node_key.clone(), node);
                 }
 
-                if i < len-2 {
-                    let parent = &host_elements[i+1..len].join(".");
+                if i < len - 2 {
+                    let parent = &host_elements[i + 1..len].join(".");
                     let edge_key = (parent.clone(), node_key.clone());
                     if edges.contains_key(&edge_key) {
                         let edge = edges.get(&edge_key);
-                    } else { 
-                        let edge = graph.add_edge(nodes[parent], nodes[node_key], GraphEdge { });
+                    } else {
+                        let edge = graph.add_edge(nodes[parent], nodes[node_key], GraphEdge {});
                         edges.insert((parent.clone(), node_key.clone()), edge);
                     }
                 }
             }
         }
 
-        if let Some(ref path) = doc.path.clone(){
-            let path_elements : Vec<String> = path.split("/").map(|s| s.to_string()).collect();
+        if let Some(ref path) = doc.path.clone() {
+            let path_elements: Vec<String> = path.split('/').map(|s| s.to_string()).collect();
             let len = path_elements.len();
             let host = doc.host.clone().unwrap_or(String::new());
             for i in 0..len {
@@ -257,36 +299,46 @@ async fn traffic_graph_builder(
                 if nodes.contains_key(path_key) {
                     let node = nodes.get(path_key);
                 } else {
-                    let weight = GraphNode { weight : path_key.clone() };
+                    let weight = GraphNode {
+                        weight: path_key.clone(),
+                    };
                     let node = graph.add_node(weight);
                     nodes.insert(path_key.clone(), node);
                 }
                 if i == 0 {
                     if nodes.contains_key(&host) {
                         let edge_key = (host.clone(), path_key.clone());
-                        if edges.contains_key(&edge_key) {
-                            let edge = edges.get(&edge_key);
+                        if let std::collections::hash_map::Entry::Vacant(e) =
+                            edges.entry(edge_key.clone())
+                        {
+                            let edge = graph.add_edge(nodes[&host], nodes[path_key], GraphEdge {});
+                            e.insert(edge);
                         } else {
-                            let edge = graph.add_edge(nodes[&host], nodes[path_key], GraphEdge { });
-                            edges.insert(edge_key, edge);
+                            let edge = edges.get(&edge_key);
                         }
                     }
                 } else {
-                    let parent_key = &format!("{}{}", host, &path_elements[i-1..len].join("/"));
+                    let parent_key = &format!("{}{}", host, &path_elements[i - 1..len].join("/"));
                     let edge_key = (parent_key.clone(), path_key.clone());
-                    if edges.contains_key(&edge_key) {
-                        let edge = edges.get(&edge_key);
-                    } else {
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        edges.entry(edge_key.clone())
+                    {
                         if nodes.contains_key(&parent_key.to_string()) {
-                            let edge = graph.add_edge(nodes[&parent_key.clone()], nodes[path_key], GraphEdge { });
-                            edges.insert(edge_key, edge);
+                            let edge = graph.add_edge(
+                                nodes[&parent_key.clone()],
+                                nodes[path_key],
+                                GraphEdge {},
+                            );
+                            e.insert(edge);
+                        } else {
+                            let edge = edges.get(&edge_key);
                         }
                     }
                 }
             }
         }
 
-        if let Some(ref method) = doc.method.clone(){
+        if let Some(ref method) = doc.method.clone() {
             let host = doc.host.clone().unwrap_or(String::new());
             let path = doc.path.clone().unwrap_or(String::new());
             let method_key = format!("{} {}{}", method.clone(), host.clone(), path.clone());
@@ -295,18 +347,19 @@ async fn traffic_graph_builder(
             if nodes.contains_key(&method_key) {
                 let node = nodes.get(&method_key);
             } else {
-                let weight = GraphNode { weight : method_key.clone() };
+                let weight = GraphNode {
+                    weight: method_key.clone(),
+                };
                 let node = graph.add_node(weight);
                 nodes.insert(method_key.clone(), node);
             }
-            if edges.contains_key(&edge_key) {
-                let edge = edges.get(&edge_key);
+            if let std::collections::hash_map::Entry::Vacant(e) = edges.entry(edge_key.clone()) {
+                let edge = graph.add_edge(nodes[&parent_key], nodes[&method_key], GraphEdge {});
+                e.insert(edge);
             } else {
-                let edge = graph.add_edge(nodes[&parent_key], nodes[&method_key], GraphEdge { });
-                edges.insert(edge_key, edge);
+                let edge = edges.get(&edge_key);
             }
         }
-
     }
 
     (graph, nodes, edges)
