@@ -295,7 +295,7 @@ async fn traffic_graph_builder(
             let len = path_elements.len();
             let host = doc.host.clone().unwrap_or(String::new());
             for i in 0..len {
-                let path_key = &format!("{}{}", host, &path_elements[i..len].join("/"));
+                let path_key = &format!("{}{}", host, &path_elements[..i+1].join("/"));
                 if nodes.contains_key(path_key) {
                     let node = nodes.get(path_key);
                 } else {
@@ -318,7 +318,7 @@ async fn traffic_graph_builder(
                         }
                     }
                 } else {
-                    let parent_key = &format!("{}{}", host, &path_elements[i - 1..len].join("/"));
+                    let parent_key = &format!("{}{}", host, &path_elements[..i].join("/"));
                     let edge_key = (parent_key.clone(), path_key.clone());
                     if let std::collections::hash_map::Entry::Vacant(e) =
                         edges.entry(edge_key.clone())
